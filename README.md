@@ -8,7 +8,7 @@
 
 1. **MC lift:** lift rotor가 자세와 고도를 제어하고 pusher는 꺼져 있다.
 2. **MC + pusher:** MC velocity controller가 전진 가속을 위해 요구한 nose-down pitch를 기존 PX4 `pusher_assist()`가 pusher thrust로 바꾼다. MC attitude/rate controller와 lift rotor는 roll·yaw·고도 제어를 계속한다. 방향 전환도 MC 제어가 담당한다.
-3. **MC return/descent:** mission velocity setpoint를 낮추면 pusher demand가 감소한다. pitch-up 제동이 요구되면 pusher command를 즉시 0으로 내린다. pusher는 역추력을 낼 수 없으므로 필요한 제동은 MC의 **pitch-up**으로 수행한다. 이후 MC로 하강·착륙한다.
+3. **MC return/descent:** mission velocity setpoint를 낮추면 pusher demand가 감소한다. requested pitch-up이 1°를 넘으면 pusher command를 즉시 0으로 내린다. pusher는 역추력을 낼 수 없으므로 필요한 제동은 MC의 **pitch-up**으로 수행한다. 이후 MC로 하강·착륙한다.
 
 ```text
 mission velocity setpoint → MC position/velocity controller → pitch demand
