@@ -1,6 +1,6 @@
-# PSI VTOL: MC-only lift + pusher 제어 변경안
+# PSI VTOL: MC-only lift + pusher 제어
 
-이 저장소는 PX4-Autopilot `release/1.17`의 커밋 `f65ddce`를 기준으로 작성한 **검증 전 펌웨어 변경안**이다. `msg/`와 `src/`의 파일은 PX4 소스 루트에서 같은 상대 경로에 적용한다. 이 저장소만 내려받아서는 빌드하거나 비행할 수 없다. 실제 기체에 적용하기 전 SITL 통합 시험, actuator bench test, tethered hover test가 필요하다.
+PX4-Autopilot `release/1.17`의 커밋 `f65ddce`를 기준으로 작성한 만들었다. `msg/`와 `src/`의 파일은 PX4와 같은 디렉토리. 실제 기체에 적용하기 위해 SITL 통합 시뮬, actuator bench test, tethered hover test가 필요하다.
 
 ## 팀이 말하는 transition
 
