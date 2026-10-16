@@ -149,7 +149,7 @@ void LoggedTopics::add_default_topics()
 	add_topic("vehicle_roi", 1000);
 	add_topic("vehicle_status");
 	add_optional_topic("vtol_vehicle_status", 200);
-	add_topic("vtol_transition_status", 20);
+	add_optional_topic("vtol_mc_assist_status", 20);
 	add_topic("wind", 1000);
 	add_topic("fixed_wing_lateral_setpoint");
 	add_topic("fixed_wing_longitudinal_setpoint");

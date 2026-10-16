@@ -67,7 +67,6 @@ VtolType::VtolType(VtolAttitudeControl *att_controller) :
 	_mc_virtual_att_sp = _attc->get_mc_virtual_att_sp();
 	_fw_virtual_att_sp = _attc->get_fw_virtual_att_sp();
 	_v_control_mode = _attc->get_control_mode();
-	_vehicle_angular_velocity = _attc->get_vehicle_angular_velocity();
 	_vtol_vehicle_status = _attc->get_vtol_vehicle_status();
 	_vehicle_torque_setpoint_virtual_mc = _attc->get_vehicle_torque_setpoint_virtual_mc();
 	_vehicle_torque_setpoint_virtual_fw = _attc->get_vehicle_torque_setpoint_virtual_fw();
@@ -178,40 +177,18 @@ bool VtolType::isFrontTransitionCompletedBase()
 	const bool airspeed_triggers_transition = PX4_ISFINITE(_attc->get_calibrated_airspeed());
 	const bool minimum_trans_time_elapsed = _time_since_trans_start > getMinimumFrontTransitionTime();
 	const bool openloop_trans_time_elapsed = _time_since_trans_start > getOpenLoopFrontTransitionTime();
-	const bool transition_airspeed_reached = airspeed_triggers_transition
-			&& _attc->get_calibrated_airspeed() >= getTransitionAirspeed();
-
-	uint32_t condition_flags = 0;
-
-	if (minimum_trans_time_elapsed) {
-		condition_flags |= vtol_transition_status_s::CONDITION_MIN_TRANSITION_TIME;
-	}
-
-	if (airspeed_triggers_transition) {
-		condition_flags |= vtol_transition_status_s::CONDITION_AIRSPEED_VALID;
-	}
-
-	if (transition_airspeed_reached) {
-		condition_flags |= vtol_transition_status_s::CONDITION_TRANSITION_AIRSPEED;
-	}
-
-	if (openloop_trans_time_elapsed) {
-		condition_flags |= vtol_transition_status_s::CONDITION_OPENLOOP_TIME;
-	}
 
 	bool transition_to_fw = false;
 
 	if (airspeed_triggers_transition) {
 		transition_to_fw = minimum_trans_time_elapsed
-				   && transition_airspeed_reached;
+				   && _attc->get_calibrated_airspeed() >= getTransitionAirspeed();
 
 	} else {
 		transition_to_fw = openloop_trans_time_elapsed;
 	}
 
-	updateFrontTransitionStability(transition_to_fw, condition_flags);
-
-	return _front_transition_condition_flags & vtol_transition_status_s::CONDITION_READY_TO_COMPLETE;
+	return transition_to_fw;
 
 }
 
@@ -224,133 +201,7 @@ void VtolType::resetTransitionStates()
 {
 	_transition_start_timestamp = hrt_absolute_time();
 	_time_since_trans_start = 0.f;
-	_front_transition_stable_start = 0;
-	_front_transition_stable_time = 0.f;
-	_front_transition_condition_flags = 0;
 	_local_position_z_start_of_transition = _local_pos->z;
-}
-
-void VtolType::updateFrontTransitionStability(bool transition_to_fw, uint32_t condition_flags)
-{
-	const hrt_abstime now = hrt_absolute_time();
-	const float required_stable_time = _param_vt_f_tr_st_tm.get();
-
-	if (!transition_to_fw) {
-		_front_transition_stable_start = 0;
-		_front_transition_stable_time = 0.f;
-		_front_transition_condition_flags = condition_flags;
-		return;
-	}
-
-	if (required_stable_time <= FLT_EPSILON) {
-		_front_transition_stable_start = 0;
-		_front_transition_stable_time = 0.f;
-		_front_transition_condition_flags = condition_flags
-						    | vtol_transition_status_s::CONDITION_STABLE_TIME
-						    | vtol_transition_status_s::CONDITION_READY_TO_COMPLETE;
-		return;
-	}
-
-	bool stable = true;
-	float roll_error = NAN;
-	float pitch_error = NAN;
-	float yaw_error = NAN;
-
-	const float attitude_q_norm_sq = _v_att->q[0] * _v_att->q[0] + _v_att->q[1] * _v_att->q[1]
-					+ _v_att->q[2] * _v_att->q[2] + _v_att->q[3] * _v_att->q[3];
-	const float setpoint_q_norm_sq = _v_att_sp->q_d[0] * _v_att_sp->q_d[0] + _v_att_sp->q_d[1] * _v_att_sp->q_d[1]
-					 + _v_att_sp->q_d[2] * _v_att_sp->q_d[2] + _v_att_sp->q_d[3] * _v_att_sp->q_d[3];
-	const bool attitude_valid = _v_att->timestamp != 0 && now >= _v_att->timestamp
-				    && now - _v_att->timestamp < 500_ms
-				    && _v_att_sp->timestamp != 0 && now >= _v_att_sp->timestamp
-				    && now - _v_att_sp->timestamp < 500_ms
-				    && PX4_ISFINITE(attitude_q_norm_sq) && attitude_q_norm_sq > FLT_EPSILON
-				    && PX4_ISFINITE(setpoint_q_norm_sq) && setpoint_q_norm_sq > FLT_EPSILON;
-
-	if (attitude_valid) {
-		const Eulerf attitude(Quatf(_v_att->q));
-		const Eulerf attitude_setpoint(Quatf(_v_att_sp->q_d));
-
-		roll_error = wrap_pi(attitude_setpoint.phi() - attitude.phi());
-		pitch_error = wrap_pi(attitude_setpoint.theta() - attitude.theta());
-		yaw_error = wrap_pi(attitude_setpoint.psi() - attitude.psi());
-
-	} else {
-		stable = false;
-	}
-
-	if (_param_vt_f_tr_roll.get() <= FLT_EPSILON || fabsf(roll_error) <= math::radians(_param_vt_f_tr_roll.get())) {
-		condition_flags |= vtol_transition_status_s::CONDITION_ROLL_ERROR;
-
-	} else {
-		stable = false;
-	}
-
-	if (_param_vt_f_tr_pitch.get() <= FLT_EPSILON || fabsf(pitch_error) <= math::radians(_param_vt_f_tr_pitch.get())) {
-		condition_flags |= vtol_transition_status_s::CONDITION_PITCH_ERROR;
-
-	} else {
-		stable = false;
-	}
-
-	if (_param_vt_f_tr_yaw.get() <= FLT_EPSILON || fabsf(yaw_error) <= math::radians(_param_vt_f_tr_yaw.get())) {
-		condition_flags |= vtol_transition_status_s::CONDITION_YAW_ERROR;
-
-	} else {
-		stable = false;
-	}
-
-	if (_param_vt_f_tr_rate.get() <= FLT_EPSILON) {
-		condition_flags |= vtol_transition_status_s::CONDITION_ANGULAR_RATE;
-
-	} else if (_vehicle_angular_velocity->timestamp != 0 && now >= _vehicle_angular_velocity->timestamp
-		   && now - _vehicle_angular_velocity->timestamp < 500_ms
-		   && PX4_ISFINITE(_vehicle_angular_velocity->xyz[0]) && PX4_ISFINITE(_vehicle_angular_velocity->xyz[1])
-		   && PX4_ISFINITE(_vehicle_angular_velocity->xyz[2])) {
-		const float max_body_rate = math::max(fabsf(_vehicle_angular_velocity->xyz[0]),
-						     math::max(fabsf(_vehicle_angular_velocity->xyz[1]), fabsf(_vehicle_angular_velocity->xyz[2])));
-
-		if (max_body_rate <= math::radians(_param_vt_f_tr_rate.get())) {
-			condition_flags |= vtol_transition_status_s::CONDITION_ANGULAR_RATE;
-
-		} else {
-			stable = false;
-		}
-
-	} else {
-		stable = false;
-	}
-
-	if (_param_vt_f_tr_vz.get() <= FLT_EPSILON) {
-		condition_flags |= vtol_transition_status_s::CONDITION_VERTICAL_VELOCITY;
-
-	} else if (_local_pos->timestamp != 0 && now >= _local_pos->timestamp
-		   && now - _local_pos->timestamp < 500_ms
-		   && _local_pos->v_z_valid && PX4_ISFINITE(_local_pos->vz) && fabsf(_local_pos->vz) <= _param_vt_f_tr_vz.get()) {
-		condition_flags |= vtol_transition_status_s::CONDITION_VERTICAL_VELOCITY;
-
-	} else {
-		stable = false;
-	}
-
-	if (stable) {
-		if (_front_transition_stable_start == 0) {
-			_front_transition_stable_start = now;
-		}
-
-		_front_transition_stable_time = (now - _front_transition_stable_start) * 1e-6f;
-
-		if (_front_transition_stable_time >= required_stable_time) {
-			condition_flags |= vtol_transition_status_s::CONDITION_STABLE_TIME
-					   | vtol_transition_status_s::CONDITION_READY_TO_COMPLETE;
-		}
-
-	} else {
-		_front_transition_stable_start = 0;
-		_front_transition_stable_time = 0.f;
-	}
-
-	_front_transition_condition_flags = condition_flags;
 }
 
 bool VtolType::isQuadchuteEnabled()
@@ -547,6 +398,8 @@ void VtolType::check_quadchute_condition()
 
 float VtolType::pusher_assist()
 {
+	const bool psi_mc_only = _attc->is_psi_mc_only();
+	bool pusher_allowed = true;
 	// Altitude above ground is local z-position or altitude above home or distance sensor altitude depending on what's available
 	float dist_to_ground = 0.f;
 	const float home_position_z = _attc->get_home_position_z();
@@ -572,26 +425,42 @@ float VtolType::pusher_assist()
 	// disable pusher assist depending on setting of forward_thrust_enable_mode:
 	switch (_param_vt_fwd_thrust_en.get()) {
 	case DISABLE: // disable in all modes
-		return 0.0f;
+		if (!psi_mc_only) {
+			return 0.0f;
+		}
+
+		pusher_allowed = false;
 		break;
 
 	case ENABLE_WITHOUT_LAND: // disable in land/descend mode
 		if (vehicle_is_landing_or_descending) {
-			return 0.0f;
+			if (!psi_mc_only) {
+				return 0.0f;
+			}
+
+			pusher_allowed = false;
 		}
 
 		break;
 
 	case ENABLE_ABOVE_MPC_LAND_ALT1: // disable if below MPC_LAND_ALT1
 		if (!PX4_ISFINITE(dist_to_ground) || (dist_to_ground < _param_mpc_land_alt1.get())) {
-			return 0.0f;
+			if (!psi_mc_only) {
+				return 0.0f;
+			}
+
+			pusher_allowed = false;
 		}
 
 		break;
 
 	case ENABLE_ABOVE_MPC_LAND_ALT2: // disable if below MPC_LAND_ALT2
 		if (!PX4_ISFINITE(dist_to_ground) || (dist_to_ground < _param_mpc_land_alt2.get())) {
-			return 0.0f;
+			if (!psi_mc_only) {
+				return 0.0f;
+			}
+
+			pusher_allowed = false;
 		}
 
 		break;
@@ -599,7 +468,11 @@ float VtolType::pusher_assist()
 	case ENABLE_ABOVE_MPC_LAND_ALT1_WITHOUT_LAND: // disable if below MPC_LAND_ALT1 or in land/descend mode
 		if (vehicle_is_landing_or_descending ||
 		    (!PX4_ISFINITE(dist_to_ground) || (dist_to_ground < _param_mpc_land_alt1.get()))) {
-			return 0.0f;
+			if (!psi_mc_only) {
+				return 0.0f;
+			}
+
+			pusher_allowed = false;
 		}
 
 		break;
@@ -607,7 +480,11 @@ float VtolType::pusher_assist()
 	case ENABLE_ABOVE_MPC_LAND_ALT2_WITHOUT_LAND: // disable if below MPC_LAND_ALT2 or in land mode
 		if (vehicle_is_landing_or_descending ||
 		    (!PX4_ISFINITE(dist_to_ground) || (dist_to_ground < _param_mpc_land_alt2.get()))) {
-			return 0.0f;
+			if (!psi_mc_only) {
+				return 0.0f;
+			}
+
+			pusher_allowed = false;
 		}
 
 		break;
@@ -615,13 +492,26 @@ float VtolType::pusher_assist()
 
 	// if the thrust scale param is zero or the drone is not in a climb rate controlled mode,
 	// then the pusher-for-pitch strategy is disabled and we can return
-	if (_param_vt_fwd_thrust_sc.get() < FLT_EPSILON || !(_v_control_mode->flag_control_climb_rate_enabled)) {
+	if (!_v_control_mode->flag_control_climb_rate_enabled
+	    || (psi_mc_only && !_v_control_mode->flag_control_velocity_enabled)) {
 		return 0.0f;
+	}
+
+	if (_param_vt_fwd_thrust_sc.get() < FLT_EPSILON) {
+		if (!psi_mc_only) {
+			return 0.0f;
+		}
+
+		pusher_allowed = false;
 	}
 
 	// Do not engage pusher assist during a failsafe event (could be a problem with the fixed wing drive)
 	if (_attc->get_vtol_vehicle_status()->fixed_wing_system_failure) {
-		return 0.0f;
+		if (!psi_mc_only) {
+			return 0.0f;
+		}
+
+		pusher_allowed = false;
 	}
 
 	const Dcmf R(Quatf(_v_att->q));
@@ -645,9 +535,9 @@ float VtolType::pusher_assist()
 	// normalized pusher support throttle (standard VTOL) or tilt (tiltrotor), initialize to 0
 	float forward_thrust = 0.0f;
 
-	float pitch_setpoint_min = math::radians(_param_vt_pitch_min.get());
+	float pitch_setpoint_min = psi_mc_only ? 0.0f : math::radians(_param_vt_pitch_min.get());
 
-	if (_attc->get_pos_sp_triplet()->current.valid
+	if (!psi_mc_only && _attc->get_pos_sp_triplet()->current.valid
 	    && _attc->get_pos_sp_triplet()->current.type == position_setpoint_s::SETPOINT_TYPE_LAND) {
 		pitch_setpoint_min = math::radians(
 					     _param_vt_lnd_pitch_min.get()); // set min pitch during LAND (usually lower to generate less lift)
@@ -686,71 +576,8 @@ float VtolType::pusher_assist()
 		q_sp.copyTo(_v_att_sp->q_d);
 	}
 
-	return forward_thrust;
+	return pusher_allowed ? forward_thrust : 0.0f;
 
-}
-
-void VtolType::fillTransitionStatus(vtol_transition_status_s &transition_status,
-		const vtol_transition_decel_s &decel_status)
-{
-	transition_status.timestamp = hrt_absolute_time();
-	transition_status.phase = static_cast<uint8_t>(_common_vtol_mode);
-	transition_status.elapsed_time = _time_since_trans_start;
-	transition_status.airspeed = _attc->get_calibrated_airspeed();
-	transition_status.target_airspeed = getTransitionAirspeed();
-	transition_status.pusher_throttle = getPusherThrottle();
-	transition_status.mc_weight = _mc_roll_weight;
-	transition_status.stable_time = _front_transition_stable_time;
-	transition_status.condition_flags = _front_transition_condition_flags;
-
-	transition_status.roll = NAN;
-	transition_status.pitch = NAN;
-	transition_status.yaw = NAN;
-	transition_status.roll_error = NAN;
-	transition_status.pitch_error = NAN;
-	transition_status.yaw_error = NAN;
-
-	const float attitude_q_norm_sq = _v_att->q[0] * _v_att->q[0] + _v_att->q[1] * _v_att->q[1]
-					+ _v_att->q[2] * _v_att->q[2] + _v_att->q[3] * _v_att->q[3];
-
-	if (PX4_ISFINITE(attitude_q_norm_sq) && attitude_q_norm_sq > FLT_EPSILON) {
-		const Eulerf attitude(Quatf(_v_att->q));
-		transition_status.roll = attitude.phi();
-		transition_status.pitch = attitude.theta();
-		transition_status.yaw = attitude.psi();
-
-		const float setpoint_q_norm_sq = _v_att_sp->q_d[0] * _v_att_sp->q_d[0] + _v_att_sp->q_d[1] * _v_att_sp->q_d[1]
-						 + _v_att_sp->q_d[2] * _v_att_sp->q_d[2] + _v_att_sp->q_d[3] * _v_att_sp->q_d[3];
-
-		if (PX4_ISFINITE(setpoint_q_norm_sq) && setpoint_q_norm_sq > FLT_EPSILON) {
-			const Eulerf attitude_setpoint(Quatf(_v_att_sp->q_d));
-			transition_status.roll_error = wrap_pi(attitude_setpoint.phi() - attitude.phi());
-			transition_status.pitch_error = wrap_pi(attitude_setpoint.theta() - attitude.theta());
-			transition_status.yaw_error = wrap_pi(attitude_setpoint.psi() - attitude.psi());
-		}
-	}
-
-	transition_status.roll_rate = _vehicle_angular_velocity->xyz[0];
-	transition_status.pitch_rate = _vehicle_angular_velocity->xyz[1];
-	transition_status.yaw_rate = _vehicle_angular_velocity->xyz[2];
-	transition_status.vertical_velocity = _local_pos->vz;
-
-	const bool decel_fresh = decel_status.timestamp != 0 && decel_status.timestamp >= _transition_start_timestamp
-			 && transition_status.timestamp >= decel_status.timestamp
-			 && transition_status.timestamp - decel_status.timestamp < 500_ms;
-	transition_status.decel_sp = _common_vtol_mode == mode::TRANSITION_TO_MC && decel_fresh ? decel_status.decel_sp : NAN;
-	transition_status.decel_actual = _common_vtol_mode == mode::TRANSITION_TO_MC && decel_fresh ? decel_status.decel_actual : NAN;
-
-	if (_common_vtol_mode == mode::ROTARY_WING && _local_pos->v_xy_valid
-	    && _local_pos->timestamp != 0 && transition_status.timestamp >= _local_pos->timestamp
-	    && transition_status.timestamp - _local_pos->timestamp < 500_ms) {
-		const Vector2f velocity_xy{_local_pos->vx, _local_pos->vy};
-		const Vector2f acceleration_xy{_local_pos->ax, _local_pos->ay};
-
-		if (velocity_xy.isAllFinite() && acceleration_xy.isAllFinite() && velocity_xy.norm() > 0.1f) {
-			transition_status.decel_actual = -acceleration_xy.dot(velocity_xy.unit_or_zero());
-		}
-	}
 }
 
 float VtolType::getFrontTransitionTimeFactor() const

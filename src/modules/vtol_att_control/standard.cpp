@@ -48,15 +48,6 @@
 
 using namespace matrix;
 
-namespace
-{
-float quintic_s_curve(float progress)
-{
-	progress = math::constrain(progress, 0.0f, 1.0f);
-	return progress * progress * progress * (10.0f + progress * (-15.0f + 6.0f * progress));
-}
-}
-
 Standard::Standard(VtolAttitudeControl *attc) :
 	VtolType(attc)
 {
@@ -84,7 +75,6 @@ void Standard::update_vtol_state()
 		// Failsafe event, engage mc motors immediately
 		_vtol_mode = vtol_mode::MC_MODE;
 		_pusher_throttle = 0.0f;
-		_pusher_transition_initialized = false;
 
 	} else if (!_attc->is_fixed_wing_requested()) {
 
@@ -104,7 +94,6 @@ void Standard::update_vtol_state()
 			_vtol_mode = vtol_mode::MC_MODE;
 			mc_weight = 1.0f;
 			_pusher_throttle = 0.0f;
-			_pusher_transition_initialized = false;
 
 		} else if (_vtol_mode == vtol_mode::TRANSITION_TO_MC) {
 			// speed exit condition: use ground if valid, otherwise airspeed
@@ -133,8 +122,6 @@ void Standard::update_vtol_state()
 			/* NOTE: The failsafe transition to fixed-wing was removed because it can result in an
 			 * unsafe flying state. */
 			resetTransitionStates();
-			_pusher_transition_start_throttle = _pusher_throttle;
-			_pusher_transition_initialized = true;
 			_vtol_mode = vtol_mode::TRANSITION_TO_FW;
 
 		} else if (_vtol_mode == vtol_mode::FW_MODE) {
@@ -216,26 +203,17 @@ void Standard::update_transition_state()
 	}
 
 	if (_vtol_mode == vtol_mode::TRANSITION_TO_FW) {
-		if (!_pusher_transition_initialized) {
-			_pusher_transition_start_throttle = _pusher_throttle;
-			_pusher_transition_initialized = true;
-		}
-
 		if (_param_vt_psher_slew.get() <= FLT_EPSILON) {
 			// just set the final target throttle value
 			_pusher_throttle = _param_vt_f_trans_thr.get();
 
-		} else {
-			const float throttle_delta = _param_vt_f_trans_thr.get() - _pusher_transition_start_throttle;
-			const float ramp_time = 1.875f * fabsf(throttle_delta) / _param_vt_psher_slew.get();
+		} else if (_pusher_throttle <= _param_vt_f_trans_thr.get()) {
+			// ramp up throttle to the target throttle value
+			const float dt = math::min((now - _last_time_pusher_transition_update) / 1e6f, 0.05f);
+			_pusher_throttle = math::min(_pusher_throttle +
+						     _param_vt_psher_slew.get() * dt, _param_vt_f_trans_thr.get());
 
-			if (ramp_time <= FLT_EPSILON) {
-				_pusher_throttle = _param_vt_f_trans_thr.get();
-
-			} else {
-				const float smooth_progress = quintic_s_curve(_time_since_trans_start / ramp_time);
-				_pusher_throttle = _pusher_transition_start_throttle + throttle_delta * smooth_progress;
-			}
+			_last_time_pusher_transition_update = now;
 		}
 
 		_airspeed_trans_blend_margin = getTransitionAirspeed() - getBlendAirspeed();
@@ -249,13 +227,11 @@ void Standard::update_transition_state()
 
 			mc_weight = 1.0f - fabsf(_attc->get_calibrated_airspeed() - getBlendAirspeed()) /
 				    _airspeed_trans_blend_margin;
-			mc_weight = 1.0f - quintic_s_curve(1.0f - mc_weight);
 			// time based blending when no airspeed sensor is set
 
 		} else if (!PX4_ISFINITE(_attc->get_calibrated_airspeed())) {
-			const float blend_start_time = 0.5f * getMinimumFrontTransitionTime();
-			const float blend_duration = math::max(getMinimumFrontTransitionTime() - blend_start_time, FLT_EPSILON);
-			mc_weight = 1.0f - quintic_s_curve((_time_since_trans_start - blend_start_time) / blend_duration);
+			mc_weight = 1.0f - _time_since_trans_start / getMinimumFrontTransitionTime();
+			mc_weight = math::constrain(2.0f * mc_weight, 0.0f, 1.0f);
 		}
 
 		// ramp up FW_PSP_OFF
@@ -276,7 +252,6 @@ void Standard::update_transition_state()
 		q_sp.copyTo(_v_att_sp->q_d);
 
 		_pusher_throttle = 0.0f;
-		_pusher_transition_initialized = false;
 
 		// continually increase mc attitude control as we transition back to mc mode
 		if (_param_vt_b_trans_ramp.get() > FLT_EPSILON) {
@@ -296,7 +271,173 @@ void Standard::update_mc_state()
 {
 	VtolType::update_mc_state();
 
-	_pusher_throttle = VtolType::pusher_assist();
+	if (_attc->is_psi_mc_only()) {
+		const hrt_abstime now = hrt_absolute_time();
+		const bool setpoint_fresh = _mc_virtual_att_sp->timestamp != 0
+					    && now - _mc_virtual_att_sp->timestamp <= 200_ms;
+		const bool attitude_fresh = _v_att->timestamp != 0 && now - _v_att->timestamp <= 200_ms;
+		const bool attitude_valid = PX4_ISFINITE(_v_att->q[0]) && PX4_ISFINITE(_v_att->q[1])
+					    && PX4_ISFINITE(_v_att->q[2]) && PX4_ISFINITE(_v_att->q[3]);
+		const bool setpoint_valid = PX4_ISFINITE(_mc_virtual_att_sp->q_d[0])
+					    && PX4_ISFINITE(_mc_virtual_att_sp->q_d[1])
+					    && PX4_ISFINITE(_mc_virtual_att_sp->q_d[2])
+					    && PX4_ISFINITE(_mc_virtual_att_sp->q_d[3]);
+		const float raw_target = setpoint_fresh && attitude_fresh && attitude_valid && setpoint_valid
+					 ? VtolType::pusher_assist() : 0.0f;
+		update_psi_mc_assist(raw_target);
+
+	} else {
+		_psi_last_pusher_update = 0;
+		_psi_stable_start = 0;
+		_psi_pusher_rate = 0.0f;
+		_psi_assist_seen = false;
+		_pusher_throttle = VtolType::pusher_assist();
+	}
+}
+
+void Standard::update_psi_mc_assist(float raw_target)
+{
+	const hrt_abstime now = hrt_absolute_time();
+	const float airspeed = _attc->get_calibrated_airspeed();
+	const bool airspeed_valid = PX4_ISFINITE(airspeed) && airspeed >= 0.0f;
+	const bool airspeed_limit_enabled = _param_vt_psi_arsp_max.get() > FLT_EPSILON;
+	const bool airspeed_limit = airspeed_limit_enabled && airspeed_valid
+				   && airspeed >= _param_vt_psi_arsp_max.get();
+	const bool airspeed_missing = airspeed_limit_enabled && !airspeed_valid;
+	const bool setpoint_stale = _mc_virtual_att_sp->timestamp == 0
+				    || now - _mc_virtual_att_sp->timestamp > 200_ms
+				    || !PX4_ISFINITE(_mc_virtual_att_sp->q_d[0])
+				    || !PX4_ISFINITE(_mc_virtual_att_sp->q_d[1])
+				    || !PX4_ISFINITE(_mc_virtual_att_sp->q_d[2])
+				    || !PX4_ISFINITE(_mc_virtual_att_sp->q_d[3]);
+	const bool attitude_stale = _v_att->timestamp == 0 || now - _v_att->timestamp > 200_ms
+				    || !PX4_ISFINITE(_v_att->q[0]) || !PX4_ISFINITE(_v_att->q[1])
+				    || !PX4_ISFINITE(_v_att->q[2]) || !PX4_ISFINITE(_v_att->q[3]);
+	const bool landed = _land_detected->landed || _land_detected->ground_contact;
+	const bool pusher_disabled = _param_vt_fwd_thrust_en.get() == DISABLE
+				      || _param_vt_fwd_thrust_sc.get() < FLT_EPSILON
+				      || !PX4_ISFINITE(raw_target);
+	const bool control_inactive = !_v_control_mode->flag_control_climb_rate_enabled
+				      || !_v_control_mode->flag_control_velocity_enabled;
+	const bool failure = _vtol_vehicle_status->fixed_wing_system_failure;
+	const bool armed = _v_control_mode->flag_armed;
+	const float requested_pitch = !setpoint_stale ? Eulerf(Quatf(_mc_virtual_att_sp->q_d)).theta() : NAN;
+	const bool braking = PX4_ISFINITE(requested_pitch) && requested_pitch > math::radians(1.0f);
+	const bool inhibit = !armed || landed || failure || setpoint_stale || attitude_stale
+			     || airspeed_limit || airspeed_missing || pusher_disabled || control_inactive;
+	const float target = PX4_ISFINITE(raw_target) ? math::constrain(raw_target, 0.0f, 0.9f) : 0.0f;
+
+	if (inhibit || braking || _psi_last_pusher_update == 0) {
+		_pusher_throttle = 0.0f;
+		_psi_pusher_rate = 0.0f;
+
+	} else if (_psi_last_pusher_update != 0) {
+		const float dt = math::constrain((now - _psi_last_pusher_update) * 1e-6f, 0.0001f, 0.05f);
+		const float slew = math::max(_param_vt_psi_p_slew.get(), 0.1f);
+		const float rate_limit = math::max(_param_vt_psi_p_jmax.get(), 0.1f);
+		const float requested_rate = math::constrain((target - _pusher_throttle) / dt, -slew, slew);
+		_psi_pusher_rate = math::constrain(requested_rate, _psi_pusher_rate - rate_limit * dt,
+						  _psi_pusher_rate + rate_limit * dt);
+
+		if ((target - _pusher_throttle) * _psi_pusher_rate < 0.0f) {
+			_psi_pusher_rate = 0.0f;
+		}
+
+		const float next_throttle = _pusher_throttle + _psi_pusher_rate * dt;
+
+		if ((target - _pusher_throttle) * (target - next_throttle) <= 0.0f) {
+			_pusher_throttle = target;
+			_psi_pusher_rate = 0.0f;
+
+		} else {
+			_pusher_throttle = math::constrain(next_throttle, 0.0f, 0.9f);
+		}
+	}
+
+	_psi_last_pusher_update = now;
+
+	if (_pusher_throttle > 0.02f) {
+		_psi_assist_seen = true;
+	}
+
+	const bool velocity_valid = _local_pos->v_xy_valid && _local_pos_sp->timestamp != 0
+				    && now - _local_pos_sp->timestamp <= 500_ms
+				    && PX4_ISFINITE(_local_pos_sp->vx)
+				    && PX4_ISFINITE(_local_pos_sp->vy);
+	const float ground_speed = _local_pos->v_xy_valid ? hypotf(_local_pos->vx, _local_pos->vy) : NAN;
+	const float velocity_error = velocity_valid
+				     ? hypotf(_local_pos_sp->vx - _local_pos->vx, _local_pos_sp->vy - _local_pos->vy) : NAN;
+	const float vertical_velocity = _local_pos->v_z_valid ? _local_pos->vz : NAN;
+	const float commanded_pitch = !setpoint_stale ? Eulerf(Quatf(_v_att_sp->q_d)).theta() : NAN;
+	const float actual_pitch = !attitude_stale ? Eulerf(Quatf(_v_att->q)).theta() : NAN;
+	const bool stable = !inhibit && target > 0.02f && velocity_valid
+			    && velocity_error <= _param_vt_psi_verr.get()
+			    && PX4_ISFINITE(actual_pitch)
+			    && fabsf(actual_pitch) <= math::radians(_param_vt_psi_pitch.get())
+			    && PX4_ISFINITE(vertical_velocity)
+			    && fabsf(vertical_velocity) <= _param_vt_psi_vz_max.get()
+			    && fabsf(target - _pusher_throttle) < 0.05f;
+
+	if (stable) {
+		if (_psi_stable_start == 0) {
+			_psi_stable_start = now;
+		}
+
+	} else {
+		_psi_stable_start = 0;
+	}
+
+	const float stable_time = _psi_stable_start == 0 ? 0.0f : (now - _psi_stable_start) * 1e-6f;
+	const bool stable_ready = _param_vt_psi_st_tm.get() > FLT_EPSILON
+				 && stable_time >= _param_vt_psi_st_tm.get();
+	const bool landing = _attc->get_pos_sp_triplet()->current.valid
+			     && _attc->get_pos_sp_triplet()->current.type == position_setpoint_s::SETPOINT_TYPE_LAND;
+
+	_psi_status = {};
+	_psi_status.timestamp = now;
+	_psi_status.flags = (armed ? vtol_mc_assist_status_s::FLAG_ARMED : 0)
+			    | (airspeed_valid ? vtol_mc_assist_status_s::FLAG_AIRSPEED_VALID : 0)
+			    | (airspeed_limit ? vtol_mc_assist_status_s::FLAG_AIRSPEED_LIMIT : 0)
+			    | (setpoint_stale ? vtol_mc_assist_status_s::FLAG_SETPOINT_STALE : 0)
+			    | (attitude_stale ? vtol_mc_assist_status_s::FLAG_ATTITUDE_STALE : 0)
+			    | (landed ? vtol_mc_assist_status_s::FLAG_LANDED : 0)
+			    | (failure ? vtol_mc_assist_status_s::FLAG_PUSHER_FAILURE : 0)
+			    | (stable_ready ? vtol_mc_assist_status_s::FLAG_STABLE : 0)
+			    | (velocity_valid ? vtol_mc_assist_status_s::FLAG_VELOCITY_VALID : 0)
+			    | (airspeed_missing ? vtol_mc_assist_status_s::FLAG_AIRSPEED_MISSING : 0)
+			    | (pusher_disabled ? vtol_mc_assist_status_s::FLAG_PUSHER_DISABLED : 0)
+			    | (control_inactive ? vtol_mc_assist_status_s::FLAG_CONTROL_INACTIVE : 0);
+	_psi_status.requested_pitch = requested_pitch;
+	_psi_status.commanded_pitch = commanded_pitch;
+	_psi_status.pusher_target = target;
+	_psi_status.pusher_throttle = _pusher_throttle;
+	_psi_status.pusher_rate = _psi_pusher_rate;
+	_psi_status.airspeed = airspeed_valid ? airspeed : NAN;
+	_psi_status.ground_speed = ground_speed;
+	_psi_status.velocity_error = velocity_error;
+	_psi_status.vertical_velocity = vertical_velocity;
+	_psi_status.stable_time = stable_time;
+
+	if (inhibit && armed && !landed) {
+		_psi_status.phase = vtol_mc_assist_status_s::PHASE_INHIBITED;
+
+	} else if (landing) {
+		_psi_status.phase = vtol_mc_assist_status_s::PHASE_DESCENT;
+
+	} else if (_psi_assist_seen && target <= 0.02f
+		   && PX4_ISFINITE(ground_speed) && ground_speed > 0.5f) {
+		_psi_status.phase = vtol_mc_assist_status_s::PHASE_RETURN;
+
+	} else if (target > 0.02f || _pusher_throttle > 0.02f) {
+		_psi_status.phase = stable_ready ? vtol_mc_assist_status_s::PHASE_ASSIST
+					    : vtol_mc_assist_status_s::PHASE_ACCEL;
+
+	} else {
+		_psi_status.phase = vtol_mc_assist_status_s::PHASE_HOVER;
+		_psi_assist_seen = false;
+	}
+
+	_psi_status_pub.publish(_psi_status);
 }
 
 void Standard::update_fw_state()
@@ -310,6 +451,27 @@ void Standard::update_fw_state()
  */
 void Standard::fill_actuator_outputs()
 {
+	if (_vtol_mode == vtol_mode::MC_MODE && _attc->is_psi_mc_only()) {
+		const hrt_abstime now = hrt_absolute_time();
+		const bool setpoint_stale = _mc_virtual_att_sp->timestamp == 0
+					    || now - _mc_virtual_att_sp->timestamp > 200_ms;
+		const bool attitude_stale = _v_att->timestamp == 0 || now - _v_att->timestamp > 200_ms;
+
+		if (setpoint_stale || attitude_stale) {
+			_pusher_throttle = 0.0f;
+			_psi_pusher_rate = 0.0f;
+			_psi_stable_start = 0;
+			_psi_status.timestamp = now;
+			_psi_status.phase = vtol_mc_assist_status_s::PHASE_INHIBITED;
+			_psi_status.flags |= setpoint_stale ? vtol_mc_assist_status_s::FLAG_SETPOINT_STALE : 0;
+			_psi_status.flags |= attitude_stale ? vtol_mc_assist_status_s::FLAG_ATTITUDE_STALE : 0;
+			_psi_status.pusher_throttle = 0.0f;
+			_psi_status.pusher_rate = 0.0f;
+			_psi_status.stable_time = 0.0f;
+			_psi_status_pub.publish(_psi_status);
+		}
+	}
+
 	_torque_setpoint_0->timestamp = hrt_absolute_time();
 	_torque_setpoint_0->timestamp_sample = _vehicle_torque_setpoint_virtual_mc->timestamp_sample;
 	_torque_setpoint_0->xyz[0] = 0.f;

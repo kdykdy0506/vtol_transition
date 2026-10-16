@@ -353,137 +353,6 @@ PARAM_DEFINE_FLOAT(VT_FW_DIFTHR_S_Y, 0.1f);
 PARAM_DEFINE_FLOAT(VT_B_DEC_I, 0.1f);
 
 /**
- * Backtransition deceleration setpoint jerk limit
- *
- * Limits the rate of change of the commanded backtransition deceleration used by
- * the transition flight task. Set to 0 to disable limiting.
- *
- * @unit m/s^3
- * @min 0
- * @max 20
- * @decimal 2
- * @increment 0.1
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_B_DEC_JMAX, 0.0f);
-
-/**
- * Front transition stability hold time
- *
- * Additional time that all enabled stability conditions must remain true before
- * completing front transition. Set to 0 to preserve the default PX4 completion logic.
- *
- * @unit s
- * @min 0
- * @max 5
- * @decimal 2
- * @increment 0.1
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_ST_TM, 0.0f);
-
-/**
- * Front transition roll error limit
- *
- * Maximum absolute roll attitude error while the front transition stability hold
- * is active. Set to 0 to ignore this condition.
- *
- * @unit deg
- * @min 0
- * @max 90
- * @decimal 1
- * @increment 0.5
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_ROLL, 10.0f);
-
-/**
- * Front transition pitch error limit
- *
- * Maximum absolute pitch attitude error while the front transition stability hold
- * is active. Set to 0 to ignore this condition.
- *
- * @unit deg
- * @min 0
- * @max 90
- * @decimal 1
- * @increment 0.5
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_PITCH, 10.0f);
-
-/**
- * Front transition yaw error limit
- *
- * Maximum absolute yaw attitude error while the front transition stability hold
- * is active. Set to 0 to ignore this condition.
- *
- * @unit deg
- * @min 0
- * @max 180
- * @decimal 1
- * @increment 1
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_YAW, 20.0f);
-
-/**
- * Front transition angular rate limit
- *
- * Maximum absolute body angular rate on any axis while the front transition
- * stability hold is active. Set to 0 to ignore this condition.
- *
- * @unit deg/s
- * @min 0
- * @max 360
- * @decimal 1
- * @increment 1
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_RATE, 45.0f);
-
-/**
- * Front transition vertical velocity limit
- *
- * Maximum absolute NED vertical velocity while the front transition stability
- * hold is active. Set to 0 to ignore this condition.
- *
- * @unit m/s
- * @min 0
- * @max 20
- * @decimal 2
- * @increment 0.1
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_F_TR_VZ, 2.0f);
-
-/**
- * Transition status logging duration
- *
- * Time to keep publishing vtol_transition_status after a transition exits, so
- * the ULog captures the immediate post-transition response.
- *
- * @unit s
- * @min 0
- * @max 10
- * @decimal 1
- * @increment 0.5
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_FLOAT(VT_TR_LOG_DUR, 3.0f);
-
-/**
- * Keep a control-surface-free PSI aircraft in multicopter mode
- *
- * Rejects fixed-wing transition commands. Forward acceleration remains under
- * multicopter position and attitude control with the pusher as an assist motor.
- *
- * @boolean
- * @group VTOL Attitude Control
- */
-PARAM_DEFINE_INT32(VT_PSI_MC_ONLY, 0);
-
-/**
  * Minimum pitch angle during hover.
  *
  * Any pitch setpoint below this value is translated to a forward force by the fixed-wing forward actuation if
@@ -497,6 +366,106 @@ PARAM_DEFINE_INT32(VT_PSI_MC_ONLY, 0);
  * @group VTOL Attitude Control
  */
 PARAM_DEFINE_FLOAT(VT_PITCH_MIN, -5.0f);
+
+/**
+ * Keep the PSI control-surface-free aircraft in multicopter mode
+ *
+ * Rejects fixed-wing transition requests. In multicopter velocity-controlled
+ * flight, the pitch demand for forward acceleration is converted to pusher
+ * thrust while multicopter attitude control remains active.
+ *
+ * @boolean
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_INT32(VT_PSI_MC_ONLY, 0);
+
+/**
+ * PSI multicopter pusher throttle slew limit
+ *
+ * Applies only when VT_PSI_MC_ONLY is enabled. The actuator slew setting
+ * CA_R4_SLEW remains a separate downstream limit.
+ *
+ * @unit 1/s
+ * @min 0.1
+ * @max 5
+ * @decimal 2
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_P_SLEW, 0.8f);
+
+/**
+ * PSI multicopter pusher throttle rate-change limit
+ *
+ * Limits the derivative of the normalized throttle slew rate, not physical
+ * aircraft jerk.
+ *
+ * @min 0.1
+ * @max 20
+ * @decimal 2
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_P_JMAX, 1.6f);
+
+/**
+ * PSI multicopter pusher maximum airspeed
+ *
+ * Pusher is inhibited when calibrated airspeed is unavailable or reaches
+ * this threshold. Set to zero only for controlled testing without an
+ * airspeed sensor; that disables this protection.
+ *
+ * @unit m/s
+ * @min 0
+ * @max 40
+ * @decimal 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_ARSP_MAX, 12.0f);
+
+/**
+ * PSI multicopter assisted-flight stable time
+ *
+ * The stable flag is for monitoring only and does not change PX4 flight mode.
+ *
+ * @unit s
+ * @min 0
+ * @max 10
+ * @decimal 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_ST_TM, 1.0f);
+
+/**
+ * PSI multicopter horizontal velocity tracking error limit
+ *
+ * @unit m/s
+ * @min 0
+ * @max 10
+ * @decimal 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_VERR, 1.0f);
+
+/**
+ * PSI multicopter pitch limit for stable-flight monitoring
+ *
+ * @unit deg
+ * @min 0
+ * @max 45
+ * @decimal 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_PITCH, 10.0f);
+
+/**
+ * PSI multicopter vertical-speed limit for stable-flight monitoring
+ *
+ * @unit m/s
+ * @min 0
+ * @max 10
+ * @decimal 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PSI_VZ_MAX, 2.0f);
 
 /**
  * Minimum pitch angle during hover landing.

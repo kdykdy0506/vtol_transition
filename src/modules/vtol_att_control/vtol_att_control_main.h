@@ -69,7 +69,6 @@
 #include <uORB/topics/home_position.h>
 #include <uORB/topics/normalized_unsigned_setpoint.h>
 #include <uORB/topics/vehicle_air_data.h>
-#include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/position_setpoint_triplet.h>
 #include <uORB/topics/tecs_status.h>
@@ -82,8 +81,6 @@
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vtol_vehicle_status.h>
-#include <uORB/topics/vtol_transition_decel.h>
-#include <uORB/topics/vtol_transition_status.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_thrust_setpoint.h>
 #include <uORB/topics/vehicle_torque_setpoint.h>
@@ -116,6 +113,7 @@ public:
 
 	bool is_fixed_wing_requested() { return !_param_vt_psi_mc_only.get()
 			&& _transition_command == vtol_vehicle_status_s::VEHICLE_VTOL_STATE_FW; };
+	bool is_psi_mc_only() const { return _param_vt_psi_mc_only.get(); }
 
 	void quadchute(QuadchuteReason reason);
 
@@ -135,7 +133,6 @@ public:
 	struct position_setpoint_triplet_s		*get_pos_sp_triplet() {return &_pos_sp_triplet;}
 	struct tecs_status_s 				*get_tecs_status() {return &_tecs_status;}
 	struct vehicle_attitude_s 			*get_att() {return &_vehicle_attitude;}
-	struct vehicle_angular_velocity_s		*get_vehicle_angular_velocity() {return &_vehicle_angular_velocity;}
 	struct vehicle_attitude_setpoint_s		*get_att_sp() {return &_vehicle_attitude_sp;}
 	struct vehicle_attitude_setpoint_s 		*get_fw_virtual_att_sp() {return &_fw_virtual_att_sp;}
 	struct vehicle_attitude_setpoint_s 		*get_mc_virtual_att_sp() {return &_mc_virtual_att_sp;}
@@ -172,8 +169,6 @@ private:
 	uORB::Subscription _pos_sp_triplet_sub{ORB_ID(position_setpoint_triplet)};
 	uORB::Subscription _tecs_status_sub{ORB_ID(tecs_status)};
 	uORB::Subscription _vehicle_air_data_sub{ORB_ID(vehicle_air_data)};
-	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
-	uORB::Subscription _vtol_transition_decel_sub{ORB_ID(vtol_transition_decel)};
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _vehicle_cmd_sub{ORB_ID(vehicle_command)};
@@ -187,7 +182,6 @@ private:
 	uORB::PublicationMulti<vehicle_torque_setpoint_s>	_vehicle_torque_setpoint0_pub{ORB_ID(vehicle_torque_setpoint)};
 	uORB::PublicationMulti<vehicle_torque_setpoint_s>	_vehicle_torque_setpoint1_pub{ORB_ID(vehicle_torque_setpoint)};
 	uORB::Publication<vtol_vehicle_status_s>		_vtol_vehicle_status_pub{ORB_ID(vtol_vehicle_status)};
-	uORB::Publication<vtol_transition_status_s>		_vtol_transition_status_pub{ORB_ID(vtol_transition_status)};
 
 	orb_advert_t	_mavlink_log_pub{nullptr};	// mavlink log uORB handle
 
@@ -208,8 +202,6 @@ private:
 	position_setpoint_triplet_s		_pos_sp_triplet{};
 	tecs_status_s				_tecs_status{};
 	vehicle_attitude_s			_vehicle_attitude{};
-	vehicle_angular_velocity_s		_vehicle_angular_velocity{};
-	vtol_transition_decel_s		_vtol_transition_decel{};
 	vehicle_control_mode_s			_vehicle_control_mode{};
 	vehicle_land_detected_s			_land_detected{};
 	vehicle_local_position_s		_local_pos{};
@@ -237,9 +229,6 @@ private:
 
 	VtolType	*_vtol_type{nullptr};	// base class for different vtol types
 	mode		_previous_vtol_mode;
-	mode		_last_transition_status_mode{mode::ROTARY_WING};
-	hrt_abstime	_transition_status_log_until{0};
-	hrt_abstime	_mc_assist_start_timestamp{0};
 
 	bool		_initialized{false};
 
@@ -255,13 +244,10 @@ private:
 
 	void		update_callbacks();
 
-	void		publish_transition_status();
-
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::VT_TYPE>) _param_vt_type,
 		(ParamFloat<px4::params::VT_SPOILER_MC_LD>) _param_vt_spoiler_mc_ld,
 		(ParamBool<px4::params::FW_USE_AIRSPD>) _param_fw_use_airspd,
-		(ParamFloat<px4::params::VT_TR_LOG_DUR>) _param_vt_tr_log_dur,
 		(ParamBool<px4::params::VT_PSI_MC_ONLY>) _param_vt_psi_mc_only
 	)
 };

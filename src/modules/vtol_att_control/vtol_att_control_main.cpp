@@ -84,7 +84,6 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_vehicle_thrust_setpoint1_pub.advertise();
 	_vehicle_torque_setpoint0_pub.advertise();
 	_vehicle_torque_setpoint1_pub.advertise();
-	_vtol_transition_status_pub.advertise();
 }
 
 VtolAttitudeControl::~VtolAttitudeControl()
@@ -127,6 +126,7 @@ void VtolAttitudeControl::action_request_poll()
 			case action_request_s::ACTION_VTOL_TRANSITION_TO_FIXEDWING:
 				if (_param_vt_psi_mc_only.get()) {
 					_transition_command = vtol_vehicle_status_s::VEHICLE_VTOL_STATE_MC;
+					_immediate_transition = false;
 					break;
 				}
 
@@ -156,7 +156,8 @@ void VtolAttitudeControl::vehicle_cmd_poll()
 			const int transition_command_param1 = int(vehicle_command.param1 + 0.5f);
 
 			// deny transition from MC to FW in Takeoff, Land, RTL and Orbit
-			if (transition_command_param1 == vtol_vehicle_status_s::VEHICLE_VTOL_STATE_FW && _param_vt_psi_mc_only.get()) {
+			if (transition_command_param1 == vtol_vehicle_status_s::VEHICLE_VTOL_STATE_FW
+			    && _param_vt_psi_mc_only.get()) {
 				result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
 
 			} else if (transition_command_param1 == vtol_vehicle_status_s::VEHICLE_VTOL_STATE_FW &&
@@ -289,50 +290,6 @@ VtolAttitudeControl::update_callbacks()
 }
 
 void
-VtolAttitudeControl::publish_transition_status()
-{
-	const hrt_abstime now = hrt_absolute_time();
-	const mode current_vtol_mode = _vtol_type->get_mode();
-	const bool was_transition = _last_transition_status_mode == mode::TRANSITION_TO_FW
-				    || _last_transition_status_mode == mode::TRANSITION_TO_MC;
-	const bool is_transition = current_vtol_mode == mode::TRANSITION_TO_FW
-				   || current_vtol_mode == mode::TRANSITION_TO_MC;
-	vtol_transition_status_s transition_status{};
-	_vtol_type->fillTransitionStatus(transition_status, _vtol_transition_decel);
-	const bool mc_assisted = _param_vt_psi_mc_only.get() && _vehicle_control_mode.flag_armed
-				 && (transition_status.pusher_throttle > 0.02f
-				     || (_local_pos.v_xy_valid && hypotf(_local_pos.vx, _local_pos.vy) > 0.5f));
-
-	if (mc_assisted) {
-		if (_mc_assist_start_timestamp == 0) {
-			_mc_assist_start_timestamp = now;
-		}
-
-		_transition_status_log_until = now + hrt_abstime(_param_vt_tr_log_dur.get() * 1_s);
-	}
-
-	if (_param_vt_psi_mc_only.get()) {
-		transition_status.target_airspeed = NAN;
-		transition_status.elapsed_time = _mc_assist_start_timestamp == 0 ? 0.f
-					 : (now - _mc_assist_start_timestamp) * 1e-6f;
-		transition_status.condition_flags |= vtol_transition_status_s::CONDITION_FW_INHIBITED;
-	}
-
-	if (was_transition && !is_transition && _param_vt_tr_log_dur.get() > FLT_EPSILON) {
-		_transition_status_log_until = now + hrt_abstime(_param_vt_tr_log_dur.get() * 1_s);
-	}
-
-	if (is_transition || mc_assisted || now < _transition_status_log_until) {
-		_vtol_transition_status_pub.publish(transition_status);
-
-	} else {
-		_mc_assist_start_timestamp = 0;
-	}
-
-	_last_transition_status_mode = current_vtol_mode;
-}
-
-void
 VtolAttitudeControl::Run()
 {
 	if (should_exit()) {
@@ -399,8 +356,6 @@ VtolAttitudeControl::Run()
 		parameters_update();
 
 		_vehicle_control_mode_sub.update(&_vehicle_control_mode);
-		_vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
-		_vtol_transition_decel_sub.update(&_vtol_transition_decel);
 		_vehicle_attitude_sub.update(&_vehicle_attitude);
 		_local_pos_sub.update(&_local_pos);
 		_local_pos_sp_sub.update(&_local_pos_sp);
@@ -503,7 +458,6 @@ VtolAttitudeControl::Run()
 		}
 
 		_vtol_type->fill_actuator_outputs();
-		publish_transition_status();
 
 		_vehicle_thrust_setpoint0_pub.publish(_thrust_setpoint_0);
 		_vehicle_thrust_setpoint1_pub.publish(_thrust_setpoint_1);
