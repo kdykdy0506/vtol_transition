@@ -105,6 +105,6 @@ companion은 `PHASE_INHIBITED`, airspeed 누락/초과, 지속적인 velocity er
 
 ## 현재 검증 상태와 한계
 
-`git diff --check`, 변경된 C++ 4개 파일의 syntax check, PX4 SITL의 `modules__vtol_att_control` 빌드를 통과했다. 새 uORB message와 parameter metadata도 이 빌드에서 생성됐다. 전체 SITL mission 통합 시험과 실기체 시험은 아직 수행하지 않았다.
+`git diff --check`, 변경된 C++ 4개 파일의 syntax check, PX4 SITL의 `modules__vtol_att_control` 빌드를 통과했다. 새 uORB message와 parameter metadata도 이 빌드에서 생성됐다. 전체 SITL mission 통합 시험과 실기체 시험이 필요하다.
 
-이 문서의 안전 조건은 설계 의도이지 비행 안전 보증이 아니다. PX4의 offboard setpoint smoothing, airspeed sensor 신뢰도, pusher 고장 감지, 방향전환 중 side-slip, 날개 양력에 따른 lift rotor 여유, battery/ESC 열 한계는 이 패치만으로 해결되지 않는다. 특히 **mission speed ramp는 companion 쪽에 별도 구현해야 한다.** 새 코드의 비행 동작은 미검증이며 실기체에 바로 적용하면 안 된다.
+ PX4의 offboard setpoint smoothing, airspeed sensor 신뢰도, pusher 고장 감지, 방향전환 중 side-slip, 날개 양력에 따른 lift rotor 여유, battery/ESC 열 한계등을 고려할 필요가 있다. 특히 **mission speed ramp는 companion 쪽에 별도 구현해야 한다.** 새 코드의 비행 동작은 미검증이며 실기체에 바로 적용하면 안 된다.
